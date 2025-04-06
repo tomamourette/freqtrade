@@ -1,57 +1,73 @@
-FROM python:3.12.9-slim-bookworm as base
+# Freqtrade Dockerfile - Simplified Single Stage
+# Use an official Python runtime as a parent image
+FROM python:3.12.9-slim-bookworm
 
-# Setup env
+# Set environment variables
 ENV LANG C.UTF-8
 ENV LC_ALL C.UTF-8
 ENV PYTHONDONTWRITEBYTECODE 1
 ENV PYTHONFAULTHANDLER 1
-ENV PATH=/home/ftuser/.local/bin:$PATH
 ENV FT_APP_ENV="docker"
 
-# Prepare environment
-RUN mkdir /freqtrade \
-  && apt-get update \
-  && apt-get -y install sudo libatlas3-base curl sqlite3 libgomp1 \
-  && apt-get clean \
-  && useradd -u 1000 -G sudo -U -m -s /bin/bash ftuser \
-  && chown ftuser:ftuser /freqtrade \
-  # Allow sudoers
-  && echo "ftuser ALL=(ALL) NOPASSWD: /bin/chown" >> /etc/sudoers
+# Install OS dependencies + build tools + git + TA-Lib dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    build-essential \
+    libssl-dev \
+    git \
+    libffi-dev \
+    libatlas3-base \
+    curl \
+    sqlite3 \
+    libgomp1 \
+    wget \
+    tar \
+    pkg-config \
+    cmake \
+    gcc \
+  && rm -rf /var/lib/apt/lists/*
 
+# Download and install ta-lib C library
+WORKDIR /tmp
+RUN wget http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz && \
+    tar -xvzf ta-lib-0.4.0-src.tar.gz && \
+    cd ta-lib/ && \
+    ./configure --prefix=/usr && \
+    make && \
+    make install && \
+    cd / && \
+    rm -rf /tmp/*
+
+# Create user and directories
+RUN useradd -u 1000 -U -m -s /bin/bash ftuser && \
+    mkdir /freqtrade && \
+    chown ftuser:ftuser /freqtrade
+
+# Switch to non-root user
+USER ftuser
 WORKDIR /freqtrade
 
-# Install dependencies
-FROM base as python-deps
-RUN  apt-get update \
-  && apt-get -y install build-essential libssl-dev git libffi-dev libgfortran5 pkg-config cmake gcc \
-  && apt-get clean \
-  && pip install --upgrade pip wheel
+# Add .local/bin to path AFTER switching user
+ENV PATH=/home/ftuser/.local/bin:$PATH
 
-# Install TA-lib
-COPY build_helpers/* /tmp/
-RUN cd /tmp && /tmp/install_ta-lib.sh && rm -r /tmp/*ta-lib*
-ENV LD_LIBRARY_PATH /usr/local/lib
-
-# Install dependencies
-COPY --chown=ftuser:ftuser requirements.txt requirements-hyperopt.txt /freqtrade/
-USER ftuser
-RUN  pip install --user --no-cache-dir "numpy<2.0" \
-  && pip install --user --no-cache-dir -r requirements-hyperopt.txt
-
-# Copy dependencies to runtime-image
-FROM base as runtime-image
-COPY --from=python-deps /usr/local/lib /usr/local/lib
-ENV LD_LIBRARY_PATH /usr/local/lib
-
-COPY --from=python-deps --chown=ftuser:ftuser /home/ftuser/.local /home/ftuser/.local
-
-USER ftuser
-# Install and execute
+# Copy application code (including user_data/config.json if tracked by git)
 COPY --chown=ftuser:ftuser . /freqtrade/
 
-RUN pip install -e . --user --no-cache-dir --no-build-isolation \
-  && freqtrade install-ui
+# Install python dependencies (including freqtrade itself in editable mode)
+# Ensure requirements*.txt and pyproject.toml were copied above
+RUN pip install --user --no-cache-dir --upgrade pip wheel && \
+    pip install --user --no-cache-dir "numpy<2.0" && \
+    pip install --user --no-cache-dir -r requirements.txt && \
+    pip install --user --no-cache-dir -r requirements-hyperopt.txt && \
+    pip install -e . --user --no-cache-dir --no-build-isolation && \
+    freqtrade install-ui
 
+# Expose ports
+EXPOSE 8080
+EXPOSE 9090
+
+# Set entrypoint
 ENTRYPOINT ["freqtrade"]
-# Default to trade mode
+
+# Default command (points to config inside user_data)
 CMD [ "trade", "--config", "user_data/config.json" ]
