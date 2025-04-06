@@ -53,6 +53,11 @@ ENV PATH=/home/ftuser/.local/bin:$PATH
 # Copy application code (including user_data/config.json if tracked by git)
 COPY --chown=ftuser:ftuser . /freqtrade/
 
+# --- DIAGNOSTIC STEP ---
+# List files after copy to see if user_data and config.json are present
+RUN ls -la /freqtrade/ && ls -la /freqtrade/user_data/ || echo "user_data not found by ls"
+# --- END DIAGNOSTIC STEP ---
+
 # Install python dependencies (including freqtrade itself in editable mode)
 # Ensure requirements*.txt and pyproject.toml were copied above
 RUN pip install --user --no-cache-dir --upgrade pip wheel && \
