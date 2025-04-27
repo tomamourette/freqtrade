@@ -81,6 +81,19 @@ Without this, the bot will always respond to the general channel in the group if
 
 Similar to the group-id - you can use `/tg_info` from the topic/thread to get the correct topic-id.
 
+#### Authorized users
+
+For groups, it can be useful to limit who can send commands to the bot.
+
+If `"authorized_users": []` is present and empty, no user will be allowed to control the bot.
+In the below example, only the user with the id "1234567" is allowed to control the bot - all other users will only be able to receive messages.
+
+```json
+   "chat_id": "-1001332619709",
+   "topic_id": "3",
+   "authorized_users": ["1234567"]
+```
+
 ## Control telegram noise
 
 Freqtrade provides means to control the verbosity of your telegram bot.
@@ -175,7 +188,7 @@ You can create your own keyboard in `config.json`:
 !!! Note "Supported Commands"
     Only the following commands are allowed. Command arguments are not supported!
 
-    `/start`, `/stop`, `/status`, `/status table`, `/trades`, `/profit`, `/performance`, `/daily`, `/stats`, `/count`, `/locks`, `/balance`, `/stopentry`, `/reload_config`, `/show_config`, `/logs`, `/whitelist`, `/blacklist`, `/edge`, `/help`, `/version`, `/marketdir`
+    `/start`, `/pause`, `/stop`, `/status`, `/status table`, `/trades`, `/profit`, `/performance`, `/daily`, `/stats`, `/count`, `/locks`, `/balance`, `/stopentry`, `/reload_config`, `/show_config`, `/logs`, `/whitelist`, `/blacklist`, `/edge`, `/help`, `/version`, `/marketdir`
 
 ## Telegram commands
 
@@ -187,6 +200,7 @@ official commands. You can ask at any moment for help with `/help`.
 |----------|-------------|
 | **System commands**
 | `/start` | Starts the trader
+| `/pause` | Pause the trader. Gracefully handle open trades according to their rules. Do not enter new positions.
 | `/stop` | Stops the trader
 | `/stopbuy | /stopentry` | Stops the trader from opening new trades. Gracefully closes open trades according to their rules.
 | `/reload_config` | Reloads the configuration file
@@ -236,6 +250,10 @@ Below, example of Telegram message you will receive for each command.
 ### /start
 
 > **Status:** `running`
+
+### /pause
+
+> **Status:** `paused`
 
 ### /stop
 

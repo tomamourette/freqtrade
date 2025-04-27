@@ -148,6 +148,7 @@ class Exchange:
         "trades_has_history": False,
         "l2_limit_range": None,
         "l2_limit_range_required": True,  # Allow Empty L2 limit (kucoin)
+        "l2_limit_upper": None,  # Upper limit for L2 limit
         "mark_ohlcv_price": "mark",
         "mark_ohlcv_timeframe": "8h",
         "funding_fee_timeframe": "8h",
@@ -1955,14 +1956,18 @@ class Exchange:
 
     @staticmethod
     def get_next_limit_in_list(
-        limit: int, limit_range: list[int] | None, range_required: bool = True
+        limit: int,
+        limit_range: list[int] | None,
+        range_required: bool = True,
+        upper_limit: int | None = None,
     ):
         """
         Get next greater value in the list.
         Used by fetch_l2_order_book if the api only supports a limited range
+        if both limit_range and upper_limit is provided, limit_range wins.
         """
         if not limit_range:
-            return limit
+            return min(limit, upper_limit) if upper_limit else limit
 
         result = min([x for x in limit_range if limit <= x] + [max(limit_range)])
         if not range_required and limit > result:
@@ -1979,7 +1984,10 @@ class Exchange:
         {'asks': [price, volume], 'bids': [price, volume]}
         """
         limit1 = self.get_next_limit_in_list(
-            limit, self._ft_has["l2_limit_range"], self._ft_has["l2_limit_range_required"]
+            limit,
+            self._ft_has["l2_limit_range"],
+            self._ft_has["l2_limit_range_required"],
+            self._ft_has["l2_limit_upper"],
         )
         try:
             return self._api.fetch_l2_order_book(pair, limit1)
@@ -2441,8 +2449,8 @@ class Exchange:
 
                     return self._exchange_ws.get_ohlcv(pair, timeframe, candle_type, candle_ts)
                 logger.info(
-                    f"Failed to reuse watch {pair}, {timeframe}, {candle_ts < last_refresh_time},"
-                    f" {candle_ts}, {last_refresh_time}, "
+                    f"Couldn't reuse watch for {pair}, {timeframe}, falling back to REST api. "
+                    f"{candle_ts < last_refresh_time}, {candle_ts}, {last_refresh_time}, "
                     f"{format_ms_time(candle_ts)}, {format_ms_time(last_refresh_time)} "
                 )
 
@@ -3688,12 +3696,12 @@ class Exchange:
     def dry_run_liquidation_price(
         self,
         pair: str,
-        open_rate: float,  # Entry price of position
+        open_rate: float,
         is_short: bool,
         amount: float,
         stake_amount: float,
         leverage: float,
-        wallet_balance: float,  # Or margin balance
+        wallet_balance: float,
         open_trades: list,
     ) -> float | None:
         """
@@ -3714,8 +3722,6 @@ class Exchange:
         :param amount: Absolute value of position size incl. leverage (in base currency)
         :param stake_amount: Stake amount - Collateral in settle currency.
         :param leverage: Leverage used for this position.
-        :param trading_mode: SPOT, MARGIN, FUTURES, etc.
-        :param margin_mode: Either ISOLATED or CROSS
         :param wallet_balance: Amount of margin_mode in the wallet being used to trade
             Cross-Margin Mode: crossWalletBalance
             Isolated-Margin Mode: isolatedWalletBalance

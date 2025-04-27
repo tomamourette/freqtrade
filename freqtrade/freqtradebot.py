@@ -300,7 +300,7 @@ class FreqtradeBot(LoggingMixin):
                 self.process_open_trade_positions()
 
         # Then looking for entry opportunities
-        if self.get_free_open_trades():
+        if self.state == State.RUNNING and self.get_free_open_trades():
             self.enter_positions()
         self._schedule.run_pending()
         Trade.commit()
@@ -781,6 +781,10 @@ class FreqtradeBot(LoggingMixin):
         )
 
         if stake_amount is not None and stake_amount > 0.0:
+            if self.state == State.PAUSED:
+                logger.debug("Position adjustment aborted because the bot is in PAUSED state")
+                return
+
             # We should increase our position
             if self.strategy.max_entry_position_adjustment > -1:
                 count_of_entries = trade.nr_of_successful_entries
@@ -789,6 +793,7 @@ class FreqtradeBot(LoggingMixin):
                     return
                 else:
                     logger.debug("Max adjustment entries is set to unlimited.")
+
             self.execute_entry(
                 trade.pair,
                 stake_amount,
@@ -1711,47 +1716,68 @@ class FreqtradeBot(LoggingMixin):
                 cancel_reason = constants.CANCEL_REASON["USER_CANCEL"]
 
             if order_obj.safe_placement_price != adjusted_price:
-                # cancel existing order if new price is supplied or None
-                res = self.handle_cancel_order(
-                    order, order_obj, trade, cancel_reason, replacing=replacing
+                self.handle_replace_order(
+                    order,
+                    order_obj,
+                    trade,
+                    adjusted_price,
+                    is_entry,
+                    cancel_reason,
+                    replacing=replacing,
                 )
-                if not res:
-                    self.replace_order_failed(
-                        trade, f"Could not fully cancel order for {trade}, therefore not replacing."
+
+    def handle_replace_order(
+        self,
+        order: CcxtOrder | None,
+        order_obj: Order,
+        trade: Trade,
+        new_order_price: float | None,
+        is_entry: bool,
+        cancel_reason: str,
+        replacing: bool = False,
+    ) -> None:
+        """
+        Cancel existing order if new price is supplied, and if the cancel is successful,
+        places a new order with the remaining capital.
+        """
+        if not order:
+            order = self.exchange.fetch_order(order_obj.order_id, trade.pair)
+        res = self.handle_cancel_order(order, order_obj, trade, cancel_reason, replacing=replacing)
+        if not res:
+            self.replace_order_failed(
+                trade, f"Could not fully cancel order for {trade}, therefore not replacing."
+            )
+            return
+        if new_order_price:
+            # place new order only if new price is supplied
+            try:
+                if is_entry:
+                    succeeded = self.execute_entry(
+                        pair=trade.pair,
+                        stake_amount=(
+                            order_obj.safe_remaining * order_obj.safe_price / trade.leverage
+                        ),
+                        price=new_order_price,
+                        trade=trade,
+                        is_short=trade.is_short,
+                        mode="replace",
                     )
-                    return
-                if adjusted_price:
-                    # place new order only if new price is supplied
-                    try:
-                        if is_entry:
-                            succeeded = self.execute_entry(
-                                pair=trade.pair,
-                                stake_amount=(
-                                    order_obj.safe_remaining * order_obj.safe_price / trade.leverage
-                                ),
-                                price=adjusted_price,
-                                trade=trade,
-                                is_short=trade.is_short,
-                                mode="replace",
-                            )
-                        else:
-                            succeeded = self.execute_trade_exit(
-                                trade,
-                                adjusted_price,
-                                exit_check=ExitCheckTuple(
-                                    exit_type=ExitType.CUSTOM_EXIT,
-                                    exit_reason=order_obj.ft_order_tag or "order_replaced",
-                                ),
-                                ordertype="limit",
-                                sub_trade_amt=order_obj.safe_remaining,
-                            )
-                        if not succeeded:
-                            self.replace_order_failed(
-                                trade, f"Could not replace order for {trade}."
-                            )
-                    except DependencyException as exception:
-                        logger.warning(f"Unable to replace order for {trade.pair}: {exception}")
-                        self.replace_order_failed(trade, f"Could not replace order for {trade}.")
+                else:
+                    succeeded = self.execute_trade_exit(
+                        trade,
+                        new_order_price,
+                        exit_check=ExitCheckTuple(
+                            exit_type=ExitType.CUSTOM_EXIT,
+                            exit_reason=order_obj.ft_order_tag or "order_replaced",
+                        ),
+                        ordertype="limit",
+                        sub_trade_amt=order_obj.safe_remaining,
+                    )
+                if not succeeded:
+                    self.replace_order_failed(trade, f"Could not replace order for {trade}.")
+            except DependencyException as exception:
+                logger.warning(f"Unable to replace order for {trade.pair}: {exception}")
+                self.replace_order_failed(trade, f"Could not replace order for {trade}.")
 
     def cancel_open_orders_of_trade(
         self, trade: Trade, sides: list[str], reason: str, replacing: bool = False
